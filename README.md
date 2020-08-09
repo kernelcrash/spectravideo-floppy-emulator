@@ -9,7 +9,8 @@ Overview
 
 For the Spectravideo SV-318 and SV-328 home computers.
 
-- Use a cheap STM32F407 board connected directly to the expansion port.
+- Makes your SV-318/328 think it has a Floppy Disk Controller and Floppy Drive attached.
+- Uses a cheap STM32F407 board connected directly to the expansion port.
 - Emulates the WD179x floppy controller at IO address 0x30.
 - Put disk images on a micro SD card
 - based on msx-floppy-and-rom-emulator
