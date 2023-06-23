@@ -49,6 +49,40 @@ Using a STM32F407VET6 or STM32F407VGT6 board
 
    GND         - GND
 ```
+and some more detail showing the rear expansion
+```
+Pin 49 is far left top of edge connector when looking at the rear of the Spectravideo
+
+49 - GND                50 - GND
+47 - NC                 48 - NC
+45 - NC                 46 - NC
+43 - NC                 44 - NC
+41 - NC                 42 - NC
+39 - D6 (PD14)          40 - D7 (PD15)
+37 - D4 (PD12)          38 - D5 (PD13)
+35 - D2 (PD10)          36 - D3 (PD11)
+33 - D0 (PD8)           34 - D1 (PD9)
+31 - _IORQ (PC0)        32 - _RD (PC3)
+29 - NC                 30 - _MREQ (PC2)
+27 - NC                 28 - NC
+25 - NC                 26 - NC
+23 - A1 (PE1)           24 - A0 (PE0)
+21 - A3 (PE3)           22 - A2 (PE2)
+19 - A5 (PE5)           20 - A4 (PE4)
+17 - A7 (PE7)           18 - A6 (PE6)
+15 - A9 (PE9)           16 - A8 (PE8)
+13 - A11 (PE11)         14 - A10 (PE10)
+11 - A13 (PE13)         12 - A12 (PE12)
+9  - A15 (PE15)         10 - A14 (PE14)
+7  - NC                 8  - NC
+5  - NC                 6  - NC
+3  - NC                 4  - NC
+1  - NC (see note)      2 - NC
+
+```
+NOTE: Pin 1 is +5V from the Spectravideo. Usually I power the stm32f407 board from a USB connector, so I don't connect pin 1 to the +5V of the stm32f407 board. 
+However if you did want to power the stm32f407 from the Spectravideo you would connect up pin 1 and make sure that you do not have USB power connected to the stm32f407 board at the same time.
+
 If you get a board with a microSD card slot, then this 'standard' wiring of the SD adapter
 is fine.
 
