@@ -149,14 +149,14 @@
 	.endr
 .endm
 
-// Use the 64K CCM ram as a sort of circular buffer for debugging
+// Log 32K to CCMRAM 0x10000000 and then stop
 .macro log_r0_r1_to_ccm_uses_r12
         vmov    r12,reg_ccmram_log
 	tst	r12,#0x8000
-	ITTT	EQ
+	ITT	EQ
         strbeq    r0,[r12],#1     // store the address 30 to XX 
         strbeq    r1,[r12],#1     // store the byte written
-        bfceq     r12,#16,#8      // Really only need to clear bit 16
+        //bfceq     r12,#16,#8      // Really only need to clear bit 16
         vmov    reg_ccmram_log,r12
 .endm
 
