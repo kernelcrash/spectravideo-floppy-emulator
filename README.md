@@ -9,7 +9,7 @@ Overview
 
 For the Spectravideo SV-318 and SV-328 home computers.
 
-- Makes your SV-318/328 think it has a Floppy Disk Controller and Floppy Drive attached.
+- Makes your SV-318/328 think it has a Floppy Disk Controller and Two Floppy Drives attached.
 - Uses a cheap STM32F407 board connected directly to the expansion port.
 - Emulates the WD179x floppy controller at IO address 0x30.
 - Put disk images on a micro SD card
@@ -96,16 +96,36 @@ Setting up the micro SD card
 ----------------------------
 
 I tend to format a micro SD card with a smallish partition (less than 1GB) with 
-FAT32. Create a spectravideo directory in the root and add disk images 
-to that directory (They have to end in .dsk, not .DSK). The order in which you
-copy the files to this directory determines the order in which you can cycle
-through them (ie. its not alphabetical). 
+FAT32. Then create a spectravideo directory in the root of the micro SD card. Normally
+you would then just copy .dsk images to the spectravideo directory (they have to end
+with '.dsk' in the filename). The order in which you copy the files to this directory
+determines the order in which you can cycle through them (ie. its not alphabetical). 
+
+These .dsk images will be presented as drive "1:" to the Spectravideo.
+
+If you want to have a second floppy image loaded in the "2:" drive, you need a slightly
+different structure. Instead of just copying the .dsk file into the spectravideo
+directory, create a subdirectory (you can call it whatever you like) and then add
+the 1: disk image to this new subdirectory making sure the filename suffix is .dsk
+or .dsk1. And then for the 2: disk, copy the disk image to this same subdirectory
+and change the filename suffix to .dsk2. Here's an example
+```
+spectravideo/
+spectravideo/testing
+spectravideo/testing/cpm.dsk
+spectravideo/testing/wordstar.dsk2
+spectravideo/basic
+spectravideo/basic/S328DBSS.DSK
+spectravideo/basic/scratch.dsk2
+spectravideo/carnival.dsk
+spectravideo/cosmic-avenger.dsk
+spectravideo/pepper2.dsk
+```
 
 The WD2793 floppy disk controller support was based on WD1793.c in fMSX by Marat Fayzullin. Note that:
 
  - Not all the chip is implemented. But most of the stuff you want is.
- - It pretends to be only one drive. But the OS will think it has two.
- - You probably have to power off/on after pressing the NEXT or PREV buttons.
+ - It pretends to be two drives. You probably have to power off/on after pressing the NEXT or PREV buttons.
 
 
 Copying the firmware to the stm32f407 board

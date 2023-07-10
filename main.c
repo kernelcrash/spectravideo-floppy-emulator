@@ -24,10 +24,12 @@ extern volatile uint8_t *high_64k_base;
 
 extern volatile uint32_t main_thread_command;
 extern volatile uint32_t main_thread_data;
-extern volatile uint32_t main_thread_actual_track;
+extern volatile uint32_t main_thread_actual_track[2];
 
 extern volatile uint8_t *track_buffer;
 extern volatile uint32_t fdc_write_flush_count;
+extern volatile uint32_t fdc_write_dirty_bits;
+
 
 #ifdef ENABLE_SEMIHOSTING
 extern void initialise_monitor_handles(void);   /*rtt*/
@@ -42,6 +44,7 @@ DIR dir;
 FATFS fs32;
 char* path;
 UINT BytesRead;
+
 
 #if _USE_LFN
     static char lfn[_MAX_LFN + 1];
@@ -383,69 +386,99 @@ void config_gpio_buttons(void) {
 
 // first track is always 18 sectors x 128 bytes. Later tracks are 17 sectors x 256 bytes
 
-FRESULT __attribute__((optimize("O0")))  load_track(FIL *fil, uint32_t track_number, char *track, boolean double_sided) {
+FRESULT __attribute__((optimize("O0")))  load_track(DSK *dsk, uint32_t disk_selects, uint32_t track_number, char *track_buffer) {
         UINT BytesRead;
         FRESULT res;
 	uint32_t offset;
 	uint32_t track_size;
+	uint32_t drive;
+	char *b;
 
-	if (track_number == 0) {
-		// track 0 is special
-		offset = 0;
-		track_size = SVI_FM_TRACK_SIZE;
-		if (double_sided) {
-			track_size+=SVI_MFM_TRACK_SIZE;  // the 2nd side of track 0 is normal MFM
-		}
-	} else {
-		// track 1 to 39
-		if (double_sided) {
-			offset = (SVI_FM_TRACK_SIZE) + (SVI_MFM_TRACK_SIZE) + ((track_number-1)  * SVI_MFM_TRACK_SIZE * 2);
-			track_size = SVI_MFM_TRACK_SIZE * 2;
-		} else {
-			offset = (SVI_FM_TRACK_SIZE) + ((track_number-1)  * SVI_MFM_TRACK_SIZE);
-			track_size = SVI_MFM_TRACK_SIZE;
-		}
-	}
+	b = track_buffer;
 
-	res = f_lseek(fil, offset);
-	if (res == FR_OK) {
-		res = f_read(fil, track, track_size, &BytesRead);
-	} else {
-                fancy_blink_pa1(1, 1000, 5, 100);
+	for (drive=0; drive<MAX_DRIVES;drive++) {
+		if ((1<<drive) & disk_selects) {
+			if (dsk[drive].fil.obj.id) {
+				if (track_number == 0) {
+					// track 0 is special
+					offset = 0;
+					track_size = SVI_FM_TRACK_SIZE;
+					if (dsk[drive].double_sided) {
+						track_size+=SVI_MFM_TRACK_SIZE;  // the 2nd side of track 0 is normal MFM
+					}
+				} else {
+					// track 1 to 39
+					if (dsk[drive].double_sided) {
+						offset = (SVI_FM_TRACK_SIZE) + (SVI_MFM_TRACK_SIZE) + ((track_number-1)  * SVI_MFM_TRACK_SIZE * 2);
+						track_size = SVI_MFM_TRACK_SIZE * 2;
+					} else {
+						offset = (SVI_FM_TRACK_SIZE) + ((track_number-1)  * SVI_MFM_TRACK_SIZE);
+						track_size = SVI_MFM_TRACK_SIZE;
+					}
+				}
+
+				res = f_lseek(&dsk[drive].fil, offset);
+				if (res == FR_OK) {
+					res = f_read(&dsk[drive].fil, b, track_size, &BytesRead);
+				} else {
+					fancy_blink_pa1(1, 1000, 5, 100);
+				}
+			}
+		}
+		b+=(ALLOCATED_TRACK_SIZE*2);
 	}
 
 	return res;
 }
 
-FRESULT __attribute__((optimize("O0"))) save_track(FIL *fil, uint32_t track_number, char *track, boolean double_sided) {
+FRESULT __attribute__((optimize("O0"))) save_track(DSK *dsk, volatile uint32_t *actual_track, char *track_buffer) {
         UINT BytesWritten;
         FRESULT res;
 	uint32_t offset;
 	uint32_t track_size;
+	uint32_t drive;
+	char *b;
 
-	if (track_number == 0) {
-		// track 0 is special
-		offset = 0;
-		track_size = SVI_FM_TRACK_SIZE;
-		if (double_sided) {
-			track_size+=SVI_MFM_TRACK_SIZE;  // the 2nd side of track 0 is normal MFM
-		}
-	} else {
-		// track 1 to 39
-		if (double_sided) {
-			offset = (SVI_FM_TRACK_SIZE) + (SVI_MFM_TRACK_SIZE) + ((track_number-1)  * SVI_MFM_TRACK_SIZE * 2);
-			track_size = SVI_MFM_TRACK_SIZE * 2;
-		} else {
-			offset = (SVI_FM_TRACK_SIZE) + ((track_number-1)  * SVI_MFM_TRACK_SIZE);
-			track_size = SVI_MFM_TRACK_SIZE;
-		}
-	}
+	b = track_buffer;
 
-	res = f_lseek(fil, offset);
-	if (res == FR_OK) {
-		res = f_write(fil, track, track_size, &BytesWritten);
-	} else {
-                blink_pa1(3000);
+	for (drive=0; drive<MAX_DRIVES;drive++) {
+		if ((1<<drive) & fdc_write_dirty_bits) {
+			if (dsk[drive].fil.obj.id) {
+				f_close(&dsk[drive].fil);
+				memset(&dsk[drive].fil, 0, sizeof(FIL));
+			}
+
+			if (actual_track[drive] == 0) {
+				// track 0 is special
+				offset = 0;
+				track_size = SVI_FM_TRACK_SIZE;
+				if (dsk[drive].double_sided) {
+					track_size+=SVI_MFM_TRACK_SIZE;  // the 2nd side of track 0 is normal MFM
+				}
+			} else {
+				// track 1 to 39
+				if (dsk[drive].double_sided) {
+					offset = (SVI_FM_TRACK_SIZE) + (SVI_MFM_TRACK_SIZE) + ((actual_track[drive]-1)  * SVI_MFM_TRACK_SIZE * 2);
+					track_size = SVI_MFM_TRACK_SIZE * 2;
+				} else {
+					offset = (SVI_FM_TRACK_SIZE) + ((actual_track[drive]-1)  * SVI_MFM_TRACK_SIZE);
+					track_size = SVI_MFM_TRACK_SIZE;
+				}
+			}
+			res = f_open(&dsk[drive].fil, dsk[drive].disk_filename, FA_WRITE);
+			if (res != FR_OK) { fancy_blink_pa1(1, 1000, 5, 100);}
+
+			res = f_lseek(&dsk[drive].fil, offset);
+			if (res == FR_OK) {
+				res = f_write(&dsk[drive].fil, b, track_size, &BytesWritten);
+			} else {
+				blink_pa1(3000);
+			}
+			f_close(&dsk[drive].fil);
+			memset(&dsk[drive].fil, 0, sizeof(FIL));
+			res = f_open(&dsk[drive].fil, dsk[drive].disk_filename, FA_READ);
+		}
+		b+=(ALLOCATED_TRACK_SIZE*2);
 	}
 	return res;
 
@@ -458,13 +491,13 @@ FRESULT __attribute__((optimize("O0"))) save_track(FIL *fil, uint32_t track_numb
 
 int __attribute__((optimize("O0")))  main(void) {
 
-        FIL fil;
+	DIR subdir;
 	TCHAR full_filename[128];
 	uint64_t next_button_debounce;
 	int first_time;
 	uint32_t	button_state;
 	int32_t	file_counter;
-	boolean double_sided;
+        DSK dsk[MAX_DRIVES];
 
 	// You have to disable lazy stacking BEFORE initialising the scratch fpu registers
 	enable_fpu_and_disable_lazy_stacking();
@@ -516,7 +549,7 @@ int __attribute__((optimize("O0")))  main(void) {
 
         TCHAR root_directory[15] = BASE_FOLDER ; 
         DIR dir;
-        static FILINFO fno;
+        static FILINFO fno,fno_sub;
 
         res = f_opendir(&dir, root_directory);
         if (res != FR_OK) {
@@ -533,7 +566,9 @@ int __attribute__((optimize("O0")))  main(void) {
 	file_counter=-1;
 
 	// This memset is actually really important
-	memset(&fil, 0, sizeof(FIL));
+	for (int drive=0;drive<MAX_DRIVES;drive++) {
+		memset(&dsk[drive].fil, 0, sizeof(FIL));
+	}
 
 
 	while(1) {
@@ -568,18 +603,56 @@ int __attribute__((optimize("O0")))  main(void) {
 				strcpy(full_filename,root_directory);
 				strcat(full_filename,"/");
 				strcat(full_filename,fno.fname);
-				if (suffix_match(fno.fname, DSK_SUFFIX)) {
-					// try to close any previous dsk
-					if (fil.obj.id) {
-						f_close(&fil);
-						memset(&fil, 0, sizeof(FIL));
+				res = f_opendir(&subdir,full_filename);
+				if (res == FR_OK) {
+					// close both drives
+					for (int drive=0;drive<MAX_DRIVES;drive++) {
+						if (dsk[drive].fil.obj.id) {
+							f_close(&dsk[drive].fil);
+							memset(&dsk[drive].fil, 0, sizeof(FIL));
+						}
+						dsk[drive].disk_filename[0] = 0;	// null out the first char of the filename (helpful in debugging)
 					}
-					res = f_open(&fil, full_filename, FA_READ);
-					if (res != FR_OK) fancy_blink_pa1(1,1500,3,100);
-					double_sided = (f_size(&fil) == SVI_SINGLE_SIDED_DISK_SIZE)? FALSE : TRUE;
+					for (;;) {
+						res = f_readdir(&subdir,&fno_sub);
+						if (res != FR_OK || fno_sub.fname[0] == 0) break;
+						if (suffix_match(fno_sub.fname,".dsk") || suffix_match(fno_sub.fname,".dsk1")) {
+							strcpy(dsk[0].disk_filename,full_filename);
+							strcat(dsk[0].disk_filename,"/");
+							strcat(dsk[0].disk_filename,fno_sub.fname);
+							res = f_open(&dsk[0].fil, dsk[0].disk_filename, FA_READ);
+							if (res != FR_OK) fancy_blink_pa1(1,1500,3,100);
+							dsk[0].double_sided = (f_size(&dsk[0].fil) == SVI_SINGLE_SIDED_DISK_SIZE)? 0 : 1;
+						} else if (suffix_match(fno_sub.fname,".dsk2")) {
+							strcpy(dsk[1].disk_filename,full_filename);
+							strcat(dsk[1].disk_filename,"/");
+							strcat(dsk[1].disk_filename,fno_sub.fname);
+							res = f_open(&dsk[1].fil, dsk[1].disk_filename, FA_READ);
+							if (res != FR_OK) fancy_blink_pa1(1,1500,3,100);
+							dsk[1].double_sided = (f_size(&dsk[1].fil) == SVI_SINGLE_SIDED_DISK_SIZE)? 0 : 1;
+						}
+					}
+					f_closedir(&subdir);
 					// trigger a seek in the next block of code.
 					main_thread_data = 0;
-					main_thread_command_reg = MAIN_THREAD_SEEK_COMMAND;
+					main_thread_command_reg = MAIN_THREAD_BUTTON_COMMAND;
+					// this willl activate the FDC emulation 
+					init_fdc();
+				} else if (suffix_match(fno.fname, DSK_SUFFIX)) {
+					// try to close any previous dsk(s)
+					for (int drive=0;drive<MAX_DRIVES;drive++) {
+						if (dsk[drive].fil.obj.id) {
+							f_close(&dsk[drive].fil);
+							memset(&dsk[drive].fil, 0, sizeof(FIL));
+						}
+					}
+					strcpy(dsk[0].disk_filename,full_filename);
+					res = f_open(&dsk[0].fil, dsk[0].disk_filename, FA_READ);
+					if (res != FR_OK) fancy_blink_pa1(1,1500,3,100);
+					dsk[0].double_sided = (f_size(&dsk[0].fil) == SVI_SINGLE_SIDED_DISK_SIZE)? 0 : 1;
+					// trigger a seek in the next block of code.
+					main_thread_data = 0;
+					main_thread_command_reg = MAIN_THREAD_BUTTON_COMMAND;
 					// this willl activate the FDC emulation 
 					init_fdc();
 				}
@@ -590,25 +663,32 @@ int __attribute__((optimize("O0")))  main(void) {
 
 		if (!(main_thread_command_reg & 0xc0000000) && (main_thread_command_reg & 0xff)) {
 			switch(main_thread_command_reg) {
+				case (MAIN_THREAD_BUTTON_COMMAND):
 				case (MAIN_THREAD_SEEK_COMMAND): {
 					main_thread_command_reg |= MAIN_COMMAND_IN_PROGRESS;
 					// Check if there is any pending write
 					if (fdc_write_flush_count) {
-						if (fil.obj.id) {
-							f_close(&fil);
-							memset(&fil, 0, sizeof(FIL));
-						}
-						res = f_open(&fil, full_filename, FA_WRITE);
-						save_track(&fil, main_thread_actual_track, (char *) &track_buffer, double_sided);
-						f_close(&fil);
-						memset(&fil, 0, sizeof(FIL));
-						res = f_open(&fil, full_filename, FA_READ);
-
+						fdc_write_flush_count = 0;
+						save_track(dsk, main_thread_actual_track,(char *) &track_buffer);
+						fdc_write_dirty_bits = 0;
 					}
 					// main_thread_data contains the track number
-					load_track(&fil, main_thread_data, (char *) &track_buffer, double_sided);
-					main_thread_actual_track = main_thread_data;
-					main_thread_command_reg |= MAIN_COMMAND_COMPLETE;
+					// bit 31 is DSK3 (not implemented) , bit 30 is DSK2, bit 29 is DSK1
+					load_track(dsk, (main_thread_data>>29), (main_thread_data & 0xff), (char *) &track_buffer);
+					delay_ms(1);
+					for (int drive = 0 ; drive<MAX_DRIVES ; drive++) {
+						if (1<<drive & (main_thread_data>>29)) {
+							main_thread_actual_track[drive] = (main_thread_data & 0xff);
+						}
+					}
+					update_fdc_track_from_intended_track_register();
+					if ((main_thread_command_reg & 0xff) == MAIN_THREAD_SEEK_COMMAND) {
+						main_thread_command_reg |= MAIN_COMMAND_COMPLETE;
+					} else {
+						// must be a next/prev button push so make sure we don't feed an INTRQ in
+						main_thread_command_reg = 0;
+					}
+
 					break;
 				}
 				// MAIN_THREAD_COMMAND_LOAD_DIRECTORY is not used. Leave for future.
@@ -624,15 +704,8 @@ int __attribute__((optimize("O0")))  main(void) {
 		if (fdc_write_flush_count) {
 			fdc_write_flush_count--;
 			if (fdc_write_flush_count == 0) {
-				if (fil.obj.id) {
-					f_close(&fil);
-					memset(&fil, 0, sizeof(FIL));
-				}
-				res = f_open(&fil, full_filename, FA_WRITE);
-				save_track(&fil, main_thread_actual_track, (char *) &track_buffer, double_sided);
-				f_close(&fil);
-				memset(&fil, 0, sizeof(FIL));
-				res = f_open(&fil, full_filename, FA_READ);
+				save_track(dsk, main_thread_actual_track, (char *) &track_buffer);
+				fdc_write_dirty_bits = 0;
 			}
 		}
 	}

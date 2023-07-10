@@ -47,6 +47,7 @@
 	// expose init_fpu_regs so we can call it from main()
 	.global	init_fpu_regs
 	.global	init_fdc
+	.global update_fdc_track_from_intended_track_register
 	.global	deactivate_fdc
 
 	.global EXTI0_IRQHandler
@@ -59,6 +60,7 @@
         .global main_thread_data
         .global main_thread_actual_track
 	.global fdc_write_flush_count
+	.global fdc_write_dirty_bits
 
 
 	.extern (rowcache)
@@ -176,6 +178,7 @@ low_64k_base:
 .section bss
 	.lcomm high_64k_base,0x10000
 	.lcomm track_buffer,2*17*256		// one MFM track double sided
+	.lcomm track_buffer_dsk2,2*17*256	// this has to immediately follow the buffer for the first disk
 	
 
 
@@ -297,12 +300,23 @@ main_thread_command:
 main_thread_data:
         .word   0x00000000                      // command arg
 main_thread_actual_track:
-        .word   0x00000000                      // command arg
+        .word   0x00000000                      // DSK1
+        .word   0x00000000                      // DSK2
 fdc_write_flush_count:
         .word   0x00000000
+fdc_write_dirty_bits:
+	.word	0x00000000
+
 
 
 .section .text
+
+.type update_fdc_track_from_intended_track_register, %function
+.align 4
+.thumb_func
+update_fdc_track_from_intended_track_register:
+        vmov    reg_fdc_track,reg_fdc_intended_track
+        bx      lr
 
 .type init_fpu_regs, %function
 .align 4
@@ -372,7 +386,7 @@ init_fdc:
 
 	movs	r0,#0
 	vmov	reg_fdc_track,r0
-	vmov	reg_fdc_actual_track,r0
+	vmov	reg_fdc_intended_track,r0
 
 	movs	r0,#0
 	vmov	reg_fdc_sector,r0
@@ -649,6 +663,10 @@ fdc_data_read:
 // non zero read length
 1$:
 	mov32	r0,#track_buffer
+	vmov	r3,reg_fdc_system
+	tst	r3,#0x02		// check if drive 2 is selected (otherwise assume drive 1)
+	IT	NE
+	addne	r0,#(ALLOCATED_TRACK_SIZE*2)
 	vmov	r3,reg_track_buffer_ptr
 	movs	r1,#0
 	ldrb	r1,[r0,r3]		// get byte from the track buffer
@@ -828,7 +846,7 @@ fdc_command_write:
 5$:
 	//clear all bits. D->R[0]=D->Track[D->Drive]? 0:F_TRACK0
 	movs	r0,#0
-	vmov	r1,reg_fdc_actual_track
+	vmov	r1,reg_fdc_intended_track
 	cmp	r1, #0
 	IT	EQ
 	moveq	r0,#F_TRACK0
@@ -868,7 +886,7 @@ fdc_command_unused:
 fdc_command_restore:
 	movs	r12,#0
 	vmov	reg_fdc_track,r12
-	vmov	reg_fdc_actual_track,r12
+	vmov	reg_fdc_intended_track,r12
 	movs	r12,#0
 	orrs	r12,#(F_INDEX|F_TRACK0)
 	tst	r1,#C_LOADHEAD
@@ -879,10 +897,11 @@ fdc_command_restore:
 	movs	r12,#WD1793_IRQ
 	vmov	reg_fdc_irq_drq,r12
 
+	vmov	r0,reg_fdc_system
+	ands	r0,#0x03
+	lsls	r0,#29
+
 	ldr	r3,=main_thread_command
-	//ldr	r1,[r3,0x08]		// get main thread track num
-	//cmp 	r1,r0
-	//beq	2$
 
 	movs	r1,#MAIN_THREAD_SEEK_COMMAND
         str     r0,[r3, 0x04]           // write cylinder to seek to 
@@ -907,15 +926,31 @@ fdc_command_seek:
 	bne	2$
 	orrs	r12,#F_TRACK0
 2$:	vmov	reg_fdc_status,r12
-	vmov	reg_fdc_track,r0	// save 'data' reg into 'track' register
-	vmov	reg_fdc_actual_track,r0	// save 'data' reg into actual 'track'
+	//vmov	reg_fdc_track,r0	// save 'data' reg into 'track' register
+	vmov	reg_fdc_intended_track,r0	// save 'data' reg into actual 'track'
 	movs	r12,#WD1793_IRQ
 	vmov	reg_fdc_irq_drq,r12
 
-	ldr	r3,=main_thread_command
-	ldr	r1,[r3,0x08]		// get main thread track num
-	cmp 	r1,r0
-	beq	3$
+	vmov	r1,reg_fdc_system
+	ands	r1,#0x03		// just the drive select bits
+	mov32	r3,#main_thread_actual_track
+	tst	r1,#0x02		// check for disk 2
+	IT	NE
+	addne	r3,#4
+	ldr	r3,[r3]
+	add	r0,r3
+	vmov	r3,reg_fdc_track
+	subs	r0,r3
+	IT	MI
+	movmi	r0,#0
+
+	lsls	r1,#29
+	orr	r0,r1
+
+	mov32	r3,#main_thread_command
+	//ldr	r1,[r3,0x08]		// get main thread track num
+	//cmp 	r1,r0
+	//beq	3$
 
 	movs	r1,#MAIN_THREAD_SEEK_COMMAND
         str     r0,[r3, 0x04]           // write cylinder to seek to 
@@ -955,7 +990,15 @@ fdc_command_step_out_and_update:
 	andeq	r12,#~S_LASTSTEPDIR
 	vmov	reg_fdc_system,r12
 2$:
-	vmov	r0,reg_fdc_actual_track
+	mov32   r3,#main_thread_actual_track
+	tst	r12,#0x02	// check for drive 2
+	IT	NE
+	addne	r3,#4
+	ldr	r3,[r3]
+
+	vmov	r0,reg_fdc_track
+	mov	r12,r0
+
 	//tst	r12,#S_DRIVE	// check if drive 0 or 1
 	//tst	r12,#0x01	// check if drive 0 or 1. TODO. DISABLING FOR NOW
 	//bne	3$
@@ -967,30 +1010,31 @@ fdc_command_step_out_and_update:
 	IT	NE
 	movne	r0,#0			// reset to track0
 
-	vmov	reg_fdc_actual_track,r0
+	vmov	reg_fdc_intended_track,r0
 3$:
 	tst	r1,#C_SETTRACK
 	IT	NE
 	vmovne	reg_fdc_track,r0
 
+	add	r0,r3
+	subs	r0,r12
+	IT	MI
+	movmi	r0,#0
+	// r0 is now the intended actual track to seek to
+
 // zero most of fdc_status
 	movs	r1,#F_INDEX
-	//tst	r12,#S_DRIVE		// r12 still has the system register
-	//tst	r12,#0x01
-	//bne	4$			// skip checking for track0 if 2nd drive
-	cmp	r0,#0
-	IT	EQ
-	orreq	r1,#F_TRACK0
 4$:
 	vmov	reg_fdc_status,r1
 
 	movs	r12,#WD1793_IRQ
 	vmov	reg_fdc_irq_drq,r12
 	
-	ldr	r3,=main_thread_command
-	ldr	r1,[r3,0x08]		// get main thread track num
-	cmp 	r1,r0
-	beq	5$
+	mov32   r3,#main_thread_command
+	vmov	r1,reg_fdc_system
+	ands	r1,#0x03
+	lsls	r1,#29
+	orr	r0,r1
 
 	movs	r1,#MAIN_THREAD_SEEK_COMMAND
         str     r0,[r3, 0x04]           // write cylinder to seek to 
@@ -1034,19 +1078,24 @@ fdc_command_read_sector:
 	IT	MI
 	movmi	r12,#0		// adjust it back to zero if it went negative
 
-	cmp	r3,#0
-	ITE	EQ
-	lsleq	r12,#7		// * 128
-	lslne	r12,#8		// * 256
+	// very rare occasion where I have run out of registers and use r2
+	movs	r2,#256
+	// r0 should still be 0 is we are on side 0. Otherwise it is the offset to where side 1 starts
+	lsl	r12,#8		// * 256 regardless. We will shift it to the right later by one if we are on track 0, side 0
+	cmp	r0,#0
+	bne	4$
+	// must be side 0
+	cmp	r3,#0		// check if track 0
+	ITT	EQ
+	lsreq	r12,#1		// divide by 2 ... so ultimately it is the sector number x 128
+	moveq	r2,#128		// sector size is 128 for track 0, side 0
 
-	adds	r0,r12
+4$:	adds	r0,r12
 	vmov	reg_track_buffer_ptr,r0
 
-	movs	r0,#256		// one sector
-	cmp	r3,#0
-	IT	EQ
-	movseq	r0,#128
-
+	mov	r0,r2			// r0 = sector size. Usually 256, but track0, side0 is 128
+	vmov	r2,reg_gpioc_base	// put r2 back
+	
 	tst	r1,#0x10	// Are we reading multiple sectors which I think is 'all sectors until end of track on one side
 	beq	1$
 	movs	r0,#17		// only implement multiple sectors for 256 byte sectors
@@ -1073,32 +1122,53 @@ fdc_command_read_sector:
 fdc_command_write_sector:
 	// assume 256 byte sector
 	movs	r0,#0		// set to beginning of track
+	vmov	r3,reg_fdc_track
 
 	tst	r1,#C_SIDECOMP
 	beq	2$
 // SIDECOMP is set so work out the side from the C_SIDE bit
 	tst	r1,#C_SIDE
-	IT	NE
-	addne	r0,#(17*256)
+	beq	2$
+	cmp	r3,#0
+	ITE	EQ
+        addeq   r0,#(18*128)
+        addne   r0,#(17*256)
 	b	3$
 
 2$:	vmov	r12,reg_fdc_system
 	tst	r12,#S_SIDE
-	IT	NE
-	addne	r0,#(17*256)
+	beq	3$
+	cmp	r3,#0
+	ITE	EQ
+        addeq   r0,#(18*128)
+        addne   r0,#(17*256)
+
 3$:	vmov	r12,reg_fdc_sector
 	subs	r12, #1		// sectors are 1 to 17. We need 0 to 16
 	IT	MI
 	movmi	r12,#0		// adjust it back to zero if it went negative
 
-	lsls	r12,#8		// * 256
-	adds	r0,r12
+	// very rare occasion where I have run out of registers and use r2
+	movs	r2,#256
+	// r0 should still be 0 is we are on side 0. Otherwise it is the offset to where side 1 starts
+	lsl	r12,#8		// * 256 regardless. We will shift it to the right later by one if we are on track 0, side 0
+	cmp	r0,#0
+	bne	4$
+	// must be side 0
+	cmp	r3,#0		// check if track 0
+	ITT	EQ
+        lsreq   r12,#1		// divide by 2 ... so ultimately it is the sector number x 128
+        moveq	r2,#128		// sector size is 128 for track 0, side 0
+
+4$:	adds	r0,r12
 	vmov	reg_track_buffer_ptr,r0
 
-	movs	r0,#256		// one sector
+	mov	r0,r2			// r0 = sector size
+	vmov	r2,reg_gpioc_base	// put r2 back
+
 	tst	r1,#0x10	// Are we writing multiple sectors which I think is 'all sectors until end of track on one side
 	beq	1$
-	movs	r0,#17
+	movs	r0,#17		// only implement multiple sectors for 256 byte sectors
 	vmov	r3,reg_fdc_sector
 	subs	r0,r3
 	adds	r0,#1
@@ -1179,19 +1249,34 @@ fdc_data_write:
 // WRITE DATA TO SECTOR. non zero write length
 1$:
 	mov32	r0,#track_buffer
+	vmov	r3,reg_fdc_system
+	IT	NE
+	addne	r0,#(ALLOCATED_TRACK_SIZE*2)
 	vmov	r3,reg_track_buffer_ptr
 	strb	r1,[r0,r3]		// store byte in track buffer
 
 	adds	r3,#1			// incr the track_buffer_ptr
 	subs	r12,#1			// decr the write length
 	vmov	reg_track_buffer_ptr,r3	// update the track_buffer_ptr
-	vmov	r3,reg_fdc_sector	// get current sector num
 	vmov	reg_fdc_write_length,r12
-	mov	r0,#0xff
-	tst	r12,r0		// see if bottom 8 bits are clear (wont work for track 0)
-	//IT	EQ
+
+	movs	r0,#(SVI_MFM_SECTOR_SIZE-1)
+	vmov	r3,reg_fdc_intended_track
+	cmp	r3,#0
+	bne	3$
+	// must be track 0
+	vmov	r3,reg_fdc_system
+	tst	r3,#S_SIDE
+	// must be track 0 side 0
+	IT	EQ
+	movseq	r0,#(SVI_FM_SECTOR_SIZE-1)
+3$:
+
+	vmov	r3,reg_fdc_sector	// get current sector num
+	tst	r12,r0		// see if bottom 8 bits are clear (or bottom 7 bits for track 0 side 0)
+	IT	EQ
 // must have crossed a sector boundary
-	//addseq	r3,#1		// incr the sector number
+	addseq	r3,#1		// incr the sector number
 	vmov	reg_fdc_sector,r3
 	cmp	r12,#0
 	bne	2$
@@ -1201,8 +1286,15 @@ fdc_data_write:
 	vmov	reg_fdc_status,r12
 	movs	r12,#WD1793_IRQ
 	vmov	reg_fdc_irq_drq,r12
+
+	vmov	r3,reg_fdc_system
+	ands	r3,#0x03
+	mov32	r1,#fdc_write_flush_count
+	ldr	r0,[r1,4]	// get current dirty bits
+	orr	r0,r3		// add in any extra dirty bits
+	str	r0,[r1,4]
+
 	mov32	r0,#FDC_WRITE_FLUSH_DEFAULT
-	ldr	r1,=fdc_write_flush_count
 	str	r0,[r1]				// trigger write after some delay
 2$:
         unrolled_exit_EXTI0
