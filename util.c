@@ -79,7 +79,7 @@ void toggle_pa1() {
 
 uint32_t suffix_match(char *name, char *suffix) {
 	if (strlen(name)>strlen(suffix)) {
-		if (strncmp (&name[strlen(name)-strlen(suffix)],suffix,strlen(suffix)) == 0) {
+		if (strncasecmp (&name[strlen(name)-strlen(suffix)],suffix,strlen(suffix)) == 0) {
 			return TRUE;
 		}
 	}

@@ -43,7 +43,7 @@
 #define reg_bit8_high	s22
 #define reg_track_buffer_ptr	s23
 #define reg_fdc_track	s24
-#define reg_fdc_actual_track	s25
+#define reg_fdc_intended_track	s25
 #define reg_fdc_sector	s26
 #define reg_fdc_data	s27
 
@@ -131,6 +131,7 @@
 #define MAIN_THREAD_CHANGE_DISK_COMMAND 2
 #define MAIN_THREAD_COMMAND_LOAD_DIRECTORY 3
 #define MAIN_THREAD_COMMAND_LOAD_ROM 4
+#define MAIN_THREAD_BUTTON_COMMAND 5
 
 #define LOAD_DIRECTORY_COMMAND_MASK 0x80
 #define LOAD_ROM_COMMAND_MASK 0x40
@@ -147,16 +148,21 @@
 #define DSK_SUFFIX	".dsk"
 
 // ------------
-#define SVI_FM_TRACK_SIZE 18*128
-#define SVI_MFM_TRACK_SIZE 17*256
+#define MAX_DRIVES			2
+#define SVI_FM_SECTOR_SIZE	128
+#define SVI_MFM_SECTOR_SIZE	256
+#define SVI_FM_TRACK_SIZE 18*SVI_FM_SECTOR_SIZE
+#define SVI_MFM_TRACK_SIZE 17*SVI_MFM_SECTOR_SIZE
 #define SVI_SINGLE_SIDED_DISK_SIZE SVI_FM_TRACK_SIZE + (39 * SVI_MFM_TRACK_SIZE)
 #define SVI_DOUBLE_SIDED_DISK_SIZE SVI_FM_TRACK_SIZE + SVI_MFM_TRACK_SIZE + ( 2 * 39 * SVI_MFM_TRACK_SIZE)
+
+#define ALLOCATED_TRACK_SIZE	SVI_MFM_TRACK_SIZE
 
 //---------
 #define CCMRAM_BASE	0x10000000
 
 //------------
-#define FDC_WRITE_FLUSH_DEFAULT	10000
+#define FDC_WRITE_FLUSH_DEFAULT	200000
 
 //----------
 #define MAIN_COMMAND_IN_PROGRESS	0x40000000
