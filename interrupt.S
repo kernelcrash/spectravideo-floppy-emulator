@@ -1250,6 +1250,7 @@ fdc_data_write:
 1$:
 	mov32	r0,#track_buffer
 	vmov	r3,reg_fdc_system
+        tst     r3,#0x02                // check if drive 2 is selected (otherwise assume drive 1)
 	IT	NE
 	addne	r0,#(ALLOCATED_TRACK_SIZE*2)
 	vmov	r3,reg_track_buffer_ptr
